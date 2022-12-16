@@ -1,10 +1,11 @@
+import traceback
 import json
 from http.server import BaseHTTPRequestHandler
 
 from flair.models import SequenceTagger
 
 from REL.mention_detection import MentionDetection
-from REL.utils import process_results
+from REL.utils import process_results, process_ed_results
 
 API_DOC = "API_DOC"
 
@@ -64,16 +65,102 @@ def make_handler(base_url, wiki_version, model, tagger_ner):
                 self.send_response(200)
                 self.end_headers()
 
-                text, spans = self.read_json(post_data)
-                response = self.generate_response(text, spans)
+                if self.path == '/mdcg':
+                    response = self.do_md_cg(post_data)
+                    self.wfile.write(bytes(json.dumps(response), "utf-8"))
 
-                self.wfile.write(bytes(json.dumps(response), "utf-8"))
+                elif self.path == '/ed':
+                    response = self.do_ed(post_data)
+                    self.wfile.write(bytes(json.dumps(response), "utf-8"))
+                elif self.path == '/combine':
+                    text, spans = self.read_json(post_data)
+                    response = self.generate_response(text, spans)
+
+                    self.wfile.write(bytes(json.dumps(response), "utf-8"))
+
+
             except Exception as e:
                 print(f"Encountered exception: {repr(e)}")
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(bytes(json.dumps([]), "utf-8"))
+                # tb = traceback.format_exc()
+
+            # finally:
+                # print(tb)
             return
+
+        def do_md_cg(self, post_data):
+            """
+            Reads input JSON message.
+
+            :return: document text and spans.
+            """
+
+            data = json.loads(post_data.decode("utf-8"))
+            text = data["text"]
+            text = text.replace("&amp;", "&")
+
+            # GERBIL sends dictionary, users send list of lists.
+            if "spans" in data:
+                try:
+                    spans = [list(d.values()) for d in data["spans"]]
+                except Exception:
+                    spans = data["spans"]
+                    pass
+            else:
+                spans = []
+
+            if len(text) == 0:
+                return []
+
+            if len(spans) > 0:
+                # ED.
+                processed = {API_DOC: [text, spans]}
+                mentions_dataset, total_ment = self.mention_detection.format_spans(
+                    processed
+                )
+            else:
+                # EL
+                processed = {API_DOC: [text, spans]}
+                mentions_dataset, total_ment = self.mention_detection.find_mentions(
+                    processed, self.tagger_ner
+                )
+
+            # Process result.
+            result = mentions_dataset
+
+            # Singular document.
+            if len(result) > 0:
+                return result
+
+            return []
+
+        def do_ed(self, post_data):
+            """
+            Reads input JSON message.
+
+            :return: document text and spans.
+            """
+
+            data = json.loads(post_data.decode("utf-8"))
+
+            # Disambiguation
+            predictions, timing = self.model.predict(data)
+
+            # Process result.
+            result = process_ed_results(
+                data,
+                predictions,
+                include_offset=False,
+            )
+
+            # Singular document.
+            if len(result) > 0:
+                return [*result.values()][0]
+
+            return []
+
 
         def read_json(self, post_data):
             """
@@ -121,8 +208,13 @@ def make_handler(base_url, wiki_version, model, tagger_ner):
                     processed, self.tagger_ner
                 )
 
+            ## MENTION DETECTION DONE + CANDIDATES ONLY
+            print(mentions_dataset)
+
             # Disambiguation
             predictions, timing = self.model.predict(mentions_dataset)
+
+
 
             # Process result.
             result = process_results(

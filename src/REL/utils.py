@@ -64,6 +64,45 @@ def preprocess_mention(m, wiki_db):
 
     return cur_m
 
+def process_ed_results(
+    mentions_dataset,
+    predictions,
+    include_offset=False,
+):
+    """
+    Function that can be used to process the End-to-End results.
+    :return: dictionary with results and document as key.
+    """
+    res = {}
+    for doc in mentions_dataset:
+        if doc not in predictions:
+            # No mentions found, we return empty list.
+            continue
+        pred_doc = predictions[doc]
+        ment_doc = mentions_dataset[doc]
+        res_doc = []
+
+        for pred, ment in zip(pred_doc, ment_doc):
+            sent = ment["sentence"]
+            idx = ment["sent_idx"]
+            start_pos = ment["pos"]
+            mention_length = int(ment["end_pos"] - ment["pos"])
+
+            if pred["prediction"] != "NIL":
+                temp = (
+                    start_pos,
+                    mention_length,
+                    ment["ngram"],
+                    pred["prediction"],
+                    pred["conf_ed"],
+                    ment["conf_md"] if "conf_md" in ment else 0.0,
+                    ment["tag"] if "tag" in ment else "NULL",
+                )
+                res_doc.append(temp)
+        res[doc] = res_doc
+    return res
+
+
 
 def process_results(
     mentions_dataset,

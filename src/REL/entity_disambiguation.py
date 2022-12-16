@@ -42,6 +42,7 @@ class EntityDisambiguation:
         self.prerank_model = None
         self.model = None
         self.reset_embeddings = reset_embeddings
+        print(os.path.join(base_url, wiki_version, "generated"))
         self.emb = GenericLookup(
             "entity_word_embedding", os.path.join(base_url, wiki_version, "generated")
         )
