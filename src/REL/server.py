@@ -65,10 +65,12 @@ def make_handler(base_url, wiki_version, model, tagger_ner):
                 self.send_response(200)
                 self.end_headers()
 
-                if self.path == '/mdcg':
-                    response = self.do_md_cg(post_data)
+                if self.path == '/md':
+                    response = self.do_md(post_data)
                     self.wfile.write(bytes(json.dumps(response), "utf-8"))
-
+                elif self.path == '/cg':
+                    response = self.do_cg(post_data)
+                    self.wfile.write(bytes(json.dumps(response), "utf-8"))
                 elif self.path == '/ed':
                     response = self.do_ed(post_data)
                     self.wfile.write(bytes(json.dumps(response), "utf-8"))
@@ -90,7 +92,7 @@ def make_handler(base_url, wiki_version, model, tagger_ner):
                 # print(tb)
             return
 
-        def do_md_cg(self, post_data):
+        def do_md(self, post_data):
             """
             Reads input JSON message.
 
@@ -98,43 +100,67 @@ def make_handler(base_url, wiki_version, model, tagger_ner):
             """
 
             data = json.loads(post_data.decode("utf-8"))
-            text = data["text"]
+            text = data["document"]["text"]
             text = text.replace("&amp;", "&")
 
-            # GERBIL sends dictionary, users send list of lists.
-            if "spans" in data:
-                try:
-                    spans = [list(d.values()) for d in data["spans"]]
-                except Exception:
-                    spans = data["spans"]
-                    pass
-            else:
-                spans = []
 
             if len(text) == 0:
                 return []
 
-            if len(spans) > 0:
-                # ED.
-                processed = {API_DOC: [text, spans]}
-                mentions_dataset, total_ment = self.mention_detection.format_spans(
-                    processed
-                )
             else:
                 # EL
-                processed = {API_DOC: [text, spans]}
+                processed = {API_DOC: [text, []]}
                 mentions_dataset, total_ment = self.mention_detection.find_mentions(
                     processed, self.tagger_ner
                 )
 
             # Process result.
             result = mentions_dataset
+            mentions = result['API_DOC']
+            mentions_formated = []
+            for mention in mentions:
+                mentions_formated.append({ 
+                                          'offset': mention['pos'],
+                                          'assignment': None,
+                                          'possibleAssignments': [],
+                                          'originalWithoutStopwords': mention['ngram'],
+                                          'detectionConfidence': mention['conf_md'],
+                                          'originalMention': mention['ngram'],
+                                          'mention': mention['mention']
+                                          })
+            
+            data["document"]["mentions"] = mentions_formated
 
             # Singular document.
             if len(result) > 0:
-                return result
+                return data
 
             return []
+
+        def do_cg(self, post_data):
+            """
+            Reads input JSON message.
+
+            :return: document text and spans.
+            """
+
+            data = json.loads(post_data.decode("utf-8"))
+
+            mentions = data['document']['mentions']
+
+
+            for mention in mentions:
+                mentions_candidates = self.mention_detection.get_candidates(
+                    mention['mention']
+                )
+                for cand in mentions_candidates:
+                    mention['possibleAssignments'].append({
+                        'score': cand[1],
+                        'assignment': 'https://wikipedia.org/wiki/' + cand[0]
+                        })
+
+
+            return data
 
         def do_ed(self, post_data):
             """
@@ -144,22 +170,46 @@ def make_handler(base_url, wiki_version, model, tagger_ner):
             """
 
             data = json.loads(post_data.decode("utf-8"))
+            format_for_predictor = {'API_DOC': []}
+
+            # TODO: FIX THE CONTEXT
+            for mention in data['document']['mentions']:
+                format_for_predictor['API_DOC'].append({
+                    'mention': mention['mention'],
+                    'context': ["", ""],
+                    'candidates': [
+                            [possibleAssignment['assignment'].replace("https://wikipedia.org/wiki/", ""), possibleAssignment['score']] 
+                            for possibleAssignment in mention['possibleAssignments']
+                        ],
+                    'gold': ['NONE'],
+                    'pos': mention['offset'],
+                    'sent_idx': 0,
+                    'ngram': mention['originalMention'],
+                    'end_pos': len(mention['mention']),
+                    'sentence': data['document']['text'],
+                    'conf_md': mention['detectionConfidence'],
+                    'tag': 'PER'
+                    })
 
             # Disambiguation
-            predictions, timing = self.model.predict(data)
+            predictions, timing = self.model.predict(format_for_predictor)
 
-            # Process result.
             result = process_ed_results(
-                data,
+                format_for_predictor,
                 predictions,
                 include_offset=False,
             )
 
-            # Singular document.
-            if len(result) > 0:
-                return [*result.values()][0]
+            for mention in data['document']['mentions']:
+                for matched_mention in result['API_DOC']:
+                    if mention['mention'] == matched_mention[2] and mention['offset'] == matched_mention[0]:
+                        mention['assignment'] = {'score': matched_mention[4], 'assignment': matched_mention[3]}
 
-            return []
+
+
+            # Singular document.
+            return data
+
 
 
         def read_json(self, post_data):
