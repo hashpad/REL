@@ -33,3 +33,5 @@ RUN /workspace/REL/scripts/download_data.sh /workspace/data generic wiki_2019 ed
 EXPOSE 5555
 
 CMD ["bash", "-c"]
+
+CMD ["python", "-m", "REL.server", "--bind", "0.0.0.0", "--port", "5555", "/workspace/data", "wiki_2019"]
